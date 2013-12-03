@@ -215,8 +215,8 @@ Procedure AuthorInformation()
   AddToLog("=============================================", #False, #False)
   AddToLog(" "+FormatStr(__("BTC-E BOT (version %1)"), PROGRAM_VERSION$), #False, #False)
   AddToLog(" URL: http://proapi.ru/btce_bot/", #False, #False)
-  AddToLog(" BTC: 17dhqFobsbr8Fraj4d2c5D4VB1uqf58DMK", #False, #False)
-  AddToLog(" LTC: LRoS6D2X5sk3LcDq2o4PX6awpXYpEZt3Qk", #False, #False)
+  AddToLog(" BTC: 1EPN3YTsfxPrJ8sfoGHLi2mt73Ex4xEwvk", #False, #False)
+  AddToLog(" LTC: LYXZmq6hXa79KytU3bdrZZNJ93QV9uLqsT", #False, #False)
   AddToLog("=============================================", #False, #False)
   AddToLog("", #False, #False)
 EndProcedure
@@ -620,5 +620,5 @@ EndDataSection
 ; VersionField17 = 0409 English (United States)
 ; VersionField18 = BTC
 ; VersionField19 = LTC
-; VersionField21 = 17dhqFobsbr8Fraj4d2c5D4VB1uqf58DMK
-; VersionField22 = LRoS6D2X5sk3LcDq2o4PX6awpXYpEZt3Qk
+; VersionField21 = 1EPN3YTsfxPrJ8sfoGHLi2mt73Ex4xEwvk
+; VersionField22 = LYXZmq6hXa79KytU3bdrZZNJ93QV9uLqsT
