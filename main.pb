@@ -1,46 +1,39 @@
-; BTC-E BOT (version 1.4.x.x)
+; BTC-E BOT (version 1.2.x.x)
 ; Author: explode48 (explode48@gmail.com)
 ; ULR: http://proapi.ru/btce_bot/
 ; License: GNU General Public License v2
 
 
-;- Глобальные переменные
-Global Run.b = #False
-Global Exit.b = #False
-Global Thread.l = #Null
-Global PROGRAM_FILENAME$ = ProgramFilename()
-Global PROGRAM_VERSION$ = GetFileVersion(PROGRAM_FILENAME$, #GFVI_FileVersion, 0) ; Compiler -> Compiler Options... -> Version Info
+PROGRAM_FILENAME$ = ProgramFilename()
+PROGRAM_VERSION$ = GetFileVersion(PROGRAM_FILENAME$, #GFVI_FileVersion, 0) ; Compiler -> Compiler Options... -> Version Info
+
 SetCurrentDirectory(GetPathPart(PROGRAM_FILENAME$)) ; Устанавливаем путь до рабочей дирректории
 
-;- Структура настроек
+Global Exit.b = #False
 Structure CFG
-  file.s           ; Путь до файла настроек
-  ; Настройки API
-  api_key.s        ; АПИ ключ
-  api_secret.s     ; Секретная строка
-  api_nonce.l      ; Инкрементный параметр
-  ; Параметры прокси
-  proxy_host.s     ; Адрес хоста (host:port)
-  proxy_login.s    ; Имя пользователя
-  proxy_pass.s     ; Пароль
-  ; Лог событий
-  log_file.s       ; Имя файла для сохранения логов
-  log_scroll.b     ; Автопрокрутка логов
-  log_verbose.b    ; Режим расширенного вывода
-  ; Параметры стратегии бота
-  bot_curpair.s    ; Валютная пара
-  bot_min_sell.d   ; Минимальная сумма ордера на продажу
-  bot_min_buy.d    ; Минимальная сумма ордера на покупку
-  bot_max_sell.d   ; Максимальная сумма ордера на продажу
-  bot_max_buy.d    ; Максимальная сумма ордера на покупку
-  bot_difference.d ; Разница между покупкой/продажей
-  bot_buy_ttl.l    ; Время жизни ордеров на покупку (мин, 0 - откл)
-  bot_delay.l      ; Задержка в основном цикле (сек)
-  bot_fall_def.b   ; Защита от падения курса
-  ; Параметры приложения
-  app_autorun.b    ; Автоматический запуск при старте приложения
+  file.s      ; Файл настроек
+  curpair.s   ; Валютная пара
+  mins.d      ; Минимальная сумма ордера на продажу
+  minb.d      ; Минимальная сумма ордера на покупку
+  maxs.d      ; Максимальная сумма ордера на продажу
+  maxb.d      ; Максимальная сумма ордера на покупку
+  diff.d      ; Разница между покупкой/продажей
+  bttl.l      ; Время жизни ордеров на покупку (мин, 0 - откл)
+  delay.l     ; Задержка в основном цикле (сек)
+  verb.b      ; Режим расширенного вывода
+  logf.s      ; Сохранять лог в файл
+  update.b    ; Проверка обновлений
 EndStructure
 Global Configs.CFG
+
+; Сравнение двух версий
+Procedure.b IfNewVersion(NewVersion.s, OldVersion.s)
+  If (Val(StringField(NewVersion, 1, "."))>Val(StringField(OldVersion, 1, "."))) Or ((Val(StringField(NewVersion, 1, "."))=Val(StringField(OldVersion, 1, "."))) And (Val(StringField(NewVersion, 2, "."))>Val(StringField(OldVersion, 2, ".")))) Or ((Val(StringField(NewVersion, 1, "."))=Val(StringField(OldVersion, 1, "."))) And (Val(StringField(NewVersion, 2, "."))=Val(StringField(OldVersion, 2, "."))) And (Val(StringField(NewVersion, 3, "."))>Val(StringField(OldVersion, 3, ".")))) Or ((Val(StringField(NewVersion, 1, "."))=Val(StringField(OldVersion, 1, "."))) And (Val(StringField(NewVersion, 2, "."))=Val(StringField(OldVersion, 2, "."))) And (Val(StringField(NewVersion, 3, "."))=Val(StringField(OldVersion, 3, "."))) And (Val(StringField(NewVersion, 4, "."))>Val(StringField(OldVersion, 4, "."))))
+    ProcedureReturn #True
+  Else
+    ProcedureReturn #False
+  EndIf
+EndProcedure
 
 ; Аналог StrD(), только без округления
 Procedure.s Double2String(value.d, nb.l)
@@ -51,574 +44,562 @@ Procedure.s Double2String(value.d, nb.l)
   ProcedureReturn result
 EndProcedure
 
-; FormatStr("This %1 is %2", "text", "formatted") ; This text is formatted
-Procedure.s FormatStr(Text.s, s1.s="", s2.s="", s3.s="", s4.s="", s5.s="", s6.s="", s7.s="", s8.s="", s9.s="", s10.s="")
-  Text = ReplaceString(Text, "%1",  s1)
-  Text = ReplaceString(Text, "%2",  s2)
-  Text = ReplaceString(Text, "%3",  s3)
-  Text = ReplaceString(Text, "%4",  s4)
-  Text = ReplaceString(Text, "%5",  s5)
-  Text = ReplaceString(Text, "%6",  s6)
-  Text = ReplaceString(Text, "%7",  s7)
-  Text = ReplaceString(Text, "%8",  s8)
-  Text = ReplaceString(Text, "%9",  s9)
-  Text = ReplaceString(Text, "%10", s10)
-	ProcedureReturn Text
+; Перевод байтов в килобайты и мегабайты
+Procedure.s GetNormalSize(Size.l)
+  result.s = ""
+  If Size<1024
+    result = Str(Size)+" Bytes"
+  ElseIf Size>=1024 And Size<1048576
+    result = Str(Round(Size/1024, #PB_Round_Nearest))+" Kb"
+  Else
+    result = StrF(Size/1048576, 2)+" Mb"
+  EndIf
+  ProcedureReturn result
 EndProcedure
 
-;- Дополнительные библиотеки
-XIncludeFile "inc/translator.pbi"; Интернализация
-XIncludeFile "inc/QuickHash.pbi" ; QuickHash library (HMAC-SHA512)
-XIncludeFile "inc/LibCurl.pbi"   ; LibCurl (работа с сетью)
-XIncludeFile "inc/Json.pbi"      ; JSON
-XIncludeFile "inc/BtceApi.pbi"   ; API для btc-e.com
+; Подключаем дополнительные библиотеки
+XIncludeFile "inc/quickhash/QuickHash.pbi"    ; QuickHash library (HMAC-SHA512)
+XIncludeFile "inc/libcurl/RW_LibCurl_Inc.pbi" ; LibCurl (работа с сетью)
+XIncludeFile "inc/json/json.pbi"              ; JSON
+XIncludeFile "inc/btce/btce_api.pbi"          ; API для btc-e.com
+XIncludeFile "inc/console/console.pbi" ; Работа с консолью
 
-; Инициализация интернализации
-Translator_init("./", "")
+;- Инициализация консоли
+OpenConsoleEx() ; Открываем консоль
+ClearConsoleEx() ; Очищаем консоль
+ConsoleCursorEx(0) ; Скрываем курсор
+ConsoleTitleEx("BTC-E BOT (version "+PROGRAM_VERSION$+")") ; Устанавливаем заголовок
+ConsoleText("=============================================")
+ConsoleText("=="+Space(Round((21-Len(PROGRAM_VERSION$))/2, #PB_Round_Down))+"BTC-E BOT (version "+PROGRAM_VERSION$+")"+Space(Round((21-Len(PROGRAM_VERSION$))/2, #PB_Round_Up))+"==")
+ConsoleText("== URL: http://proapi.ru/btce_bot          ==")
+ConsoleText("== BTC: 1EPN3YTsfxPrJ8sfoGHLi2mt73Ex4xEwvk ==")
+ConsoleText("== LTC: LYXZmq6hXa79KytU3bdrZZNJ93QV9uLqsT ==")
+ConsoleText("=============================================")
+ConsoleText("")
 
 ;- Настройки по умолчанию
-Configs\file           = "config.ini"
-; Настройки API
-Configs\api_key        = ""
-Configs\api_secret     = ""
-Configs\api_nonce      = Date()
-; Параметры прокси
-Configs\proxy_host     = ""
-Configs\proxy_login    = ""
-Configs\proxy_pass     = ""
-; Лог событий
-Configs\log_file       = ""
-Configs\log_scroll     = #True
-Configs\log_verbose    = #False
-; Параметры стратегии бота
-Configs\bot_curpair    = "btc_usd"
-Configs\bot_min_sell   = 0.01
-Configs\bot_min_buy    = 0.01
-Configs\bot_max_sell   = 0.01
-Configs\bot_max_buy    = 0.01
-Configs\bot_difference = 0.5
-Configs\bot_buy_ttl    = 360
-Configs\bot_delay      = 60
-Configs\bot_fall_def   = #True
-; Параметры приложения
-Configs\app_autorun    = #False
+Configs\file      = "config.ini"
+Configs\curpair   = "btc_usd"
+Configs\mins      = 0.01
+Configs\minb      = 0.01
+Configs\maxs      = 0.01
+Configs\maxb      = 0.01
+Configs\diff      = 0.5
+Configs\bttl      = 360
+Configs\delay     = 60
+Configs\verb      = #False
+Configs\logf      = ""
+Configs\update    = #True
+BTCE_API\key = "XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX"
+BTCE_API\secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+BTCE_API\nonce = Date()
 
-;- Параметры командной строки
+;- Получение настроек из командной строки
 For I=0 To CountProgramParameters()-1
   Select ProgramParameter(I)
     Case "-c", "--config" ; Валютная пара
       Configs\file = ProgramParameter(I+1)
     Case "-h", "--help" ; Помощь
-      MessageRequester(__("BTC-E BOT: Help"), __("Usage: btce_bot.exe [OPTIONS]"+Chr(13)+Chr(13)+"Options:"+Chr(13)+"-c, --config <FILE>"+Chr(9)+" - Use a specified configuration file."+Chr(13)+"-h, --help"+Chr(9)+Chr(9)+" - Display this help message And exit."+Chr(13)+Chr(13)+"Attention! You use this software at your own risk. The developer is Not responsible For the financial And other damage caused As a result of using this program."), #MB_ICONINFORMATION)
+      ConsoleText(" Usage: btce_bot.exe [OPTIONS]")
+      ConsoleText("")
+      ConsoleText(" Options:")
+      ConsoleText("  -c, --config <FILE>  - Use a specified configuration file.")
+      ConsoleText("  -h, --help           - Display this help text and exit.")
+      ConsoleText("")
+      ConsoleText(" Attention! You use this software at your own risk. The developer is not")
+      ConsoleText(" responsible for the financial and other damage caused as a result of using")
+      ConsoleText(" this program.")
+      ConsoleText("")
+      ConsoleText("Press ENTER key to exit...")
+      Repeat
+        Delay(100)
+      Until InkeyEx()= Chr(13)
+      CloseConsoleEx()
       End
   EndSelect
 Next I
 
 ;- Получение настроек из файла
-InitCount.l = 0
 InitConfig:
 If OpenPreferences(Configs\file)
   PreferenceGroup("api")
-  Configs\api_key        = ReadPreferenceString("key",        Configs\api_key)
-  Configs\api_secret     = ReadPreferenceString("secret",     Configs\api_secret)
-  PreferenceGroup("proxy")
-  Configs\proxy_host     = ReadPreferenceString("host",       Configs\proxy_host)
-  Configs\proxy_login    = ReadPreferenceString("login",      Configs\proxy_login)
-  Configs\proxy_pass     = ReadPreferenceString("pass",       Configs\proxy_pass)
-  PreferenceGroup("log")
-  Configs\log_file       = ReadPreferenceString("file",       Configs\log_file)
-  Configs\log_scroll     = ReadPreferenceLong(  "scroll",     Configs\log_scroll)
-  Configs\log_verbose    = ReadPreferenceLong(  "verbose",    Configs\log_verbose)
+  BTCE_API\key    = ReadPreferenceString("akey", BTCE_API\key)
+  BTCE_API\secret = ReadPreferenceString("asec", BTCE_API\secret)
   PreferenceGroup("bot")
-  Configs\bot_curpair    = ReadPreferenceString("curpair",    Configs\bot_curpair)
-  Configs\bot_min_sell   = ReadPreferenceDouble("min_sell",   Configs\bot_min_sell)
-  Configs\bot_min_buy    = ReadPreferenceDouble("min_buy",    Configs\bot_min_buy)
-  Configs\bot_max_sell   = ReadPreferenceDouble("max_sell",   Configs\bot_max_sell)
-  Configs\bot_max_buy    = ReadPreferenceDouble("max_buy",    Configs\bot_max_buy)
-  Configs\bot_difference = ReadPreferenceDouble("difference", Configs\bot_difference)
-  Configs\bot_buy_ttl    = ReadPreferenceLong(  "buy_ttl",    Configs\bot_buy_ttl)
-  Configs\bot_delay      = ReadPreferenceLong(  "delay",      Configs\bot_delay)
-  Configs\bot_fall_def   = ReadPreferenceLong(  "fall_def",   Configs\bot_fall_def)
-  PreferenceGroup("application")
-  Configs\app_autorun    = ReadPreferenceLong(  "autorun",    Configs\app_autorun)
+  Configs\curpair = ReadPreferenceString("curpair", Configs\curpair)
+  Configs\mins    = ReadPreferenceDouble("mins", Configs\mins)
+  Configs\minb    = ReadPreferenceDouble("minb", Configs\minb)
+  Configs\maxs    = ReadPreferenceDouble("maxs", Configs\maxs)
+  Configs\maxb    = ReadPreferenceDouble("maxb", Configs\maxb)
+  Configs\diff    = ReadPreferenceDouble("diff", Configs\diff)
+  Configs\bttl    = ReadPreferenceLong("bttl", Configs\bttl)
+  Configs\delay   = ReadPreferenceLong("delay", Configs\delay)
+  Configs\verb    = ReadPreferenceLong("verb", Configs\verb)
+  Configs\update  = ReadPreferenceLong("update", Configs\update)
+  Configs\logf    = ReadPreferenceString("logf", Configs\logf)
   ClosePreferences()
 ElseIf CreatePreferences(Configs\file)
   PreferenceGroup("api")
-  WritePreferenceString("key",        Configs\api_key)
-  WritePreferenceString("secret",     Configs\api_secret)
-  PreferenceGroup("proxy")
-  WritePreferenceString("host",       Configs\proxy_host)
-  WritePreferenceString("login",      Configs\proxy_login)
-  WritePreferenceString("pass",       Configs\proxy_pass)
-  PreferenceGroup("log")
-  WritePreferenceString("file",       Configs\log_file)
-  WritePreferenceLong(  "scroll",     Configs\log_scroll)
-  WritePreferenceLong(  "verbose",    Configs\log_verbose)
+  WritePreferenceString("akey", BTCE_API\key)
+  WritePreferenceString("asec", BTCE_API\secret)
   PreferenceGroup("bot")
-  WritePreferenceString("curpair",    Configs\bot_curpair)
-  WritePreferenceString("min_sell",   Double2String(Configs\bot_min_sell, 6))
-  WritePreferenceString("min_buy",    Double2String(Configs\bot_min_buy, 6))
-  WritePreferenceString("max_sell",   Double2String(Configs\bot_max_sell, 6))
-  WritePreferenceString("max_buy",    Double2String(Configs\bot_max_buy, 6))
-  WritePreferenceString("difference", Double2String(Configs\bot_difference, 6))
-  WritePreferenceLong(  "buy_ttl",    Configs\bot_buy_ttl)
-  WritePreferenceLong(  "delay",      Configs\bot_delay)
-  WritePreferenceLong(  "fall_def",   Configs\bot_fall_def)
-  PreferenceGroup("application")
-  WritePreferenceLong(  "autorun",    Configs\app_autorun)
+  WritePreferenceString("curpair", Configs\curpair)
+  WritePreferenceDouble("mins", Configs\mins)
+  WritePreferenceDouble("minb", Configs\minb)
+  WritePreferenceDouble("maxs", Configs\maxs)
+  WritePreferenceDouble("maxb", Configs\maxb)
+  WritePreferenceDouble("diff", Configs\diff)
+  WritePreferenceLong("bttl", Configs\bttl)
+  WritePreferenceLong("delay", Configs\delay)
+  WritePreferenceLong("verb", Configs\verb)
+  WritePreferenceLong("update", Configs\update)
+  WritePreferenceString("logf", Configs\logf)
   ClosePreferences()
-  InitCount + 1
-  If InitCount>5
-    MessageRequester(__("Error!"), __("Error reading or creating configuration file!"), #MB_ICONERROR)
-    End
+  Goto InitConfig
+EndIf
+
+; Здесь мы будем хранить отложенные ордеры
+NewList PendingOrders.trce_trade3()
+
+; Запускаем бота
+If Configs\verb = #True : VERB$ = " [VERB]" : Else : VERB$ = "" : EndIf
+ConsoleText("> [CURPAIR: "+UCase(StringField(Configs\curpair, 1, "_"))+"/"+UCase(StringField(Configs\curpair, 2, "_"))+"] [DIFF: "+Double2String(Configs\diff, 2)+"] [DELAY: "+Str(Configs\delay)+"]"+VERB$)
+ConsoleText("> [MINS: "+Double2String(Configs\mins, 2)+"] [MINB: "+Double2String(Configs\minb, 2)+"] [MAXS: "+Double2String(Configs\maxs, 2)+"] [MAXB: "+Double2String(Configs\maxb, 2)+"]")
+ConsoleText("> [AKEY: "+BTCE_API\key+"]")
+ConsoleText("> [ASEC: "+BTCE_API\secret+"]")
+
+ConsoleText("")
+ConsoleDateText("BTC-E BOT is running.", #False)
+
+;- Подчищаем за собой после обновления
+If FileSize(GetTemporaryDirectory()+"btce_bot_update\")=-2 And FileSize(GetTemporaryDirectory()+"btce_bot_update\updater.exe")>0 ; Если обновление только что завершилось
+  If DeleteDirectory(GetTemporaryDirectory()+"btce_bot_update\", "", #PB_FileSystem_Recursive|#PB_FileSystem_Force)
+    ConsoleDateText("Update was successful!", #False)
+  EndIf
+EndIf  
+
+;- Проверка обновлений
+If Configs\update=#True ; Если проверка обновлений включена в настройках
+  ConsoleDateText("Check for program updates...", #False)
+  UpdateInProgress.b = #False
+  hCurl = curl_easy_init() : UData$ = ""
+
+  If hCurl
+    UUrl$ = "http://update.proapi.ru/btce_bot/latest.php?v="+PROGRAM_VERSION$
+    curl_easy_setopt(hCurl, #CURLOPT_URL, @UUrl$)
+    curl_easy_setopt(hCurl, #CURLOPT_HEADER, #False)
+    curl_easy_setopt(hCurl, #CURLOPT_TIMEOUT, 30)
+    curl_easy_setopt(hCurl, #CURLOPT_WRITEFUNCTION, @RW_LibCurl_WriteFunction())
+    curl_easy_perform(hCurl)
+    UData$ = RW_LibCurl_GetData()
+    ReceivedData = ""
+    curl_easy_cleanup(hCurl)
+  EndIf
+  UData$ = Trim(UData$)
+  If UData$<>""
+    UInfo$ = StringField(UData$, 1, Chr(13)+Chr(10)) ; Читаем первую строку из файла
+    UInfo$ = Trim(UInfo$)
+    ; Парсим ее
+    UVers$    = StringField(UInfo$, 1, ":")      ; Номер новой версии
+    UVers$    = Right(UVers$, Len(UVers$)-1)
+    USize.l   = Val(StringField(UInfo$, 2, ":")) ; Размер
+    UCrs$     = StringField(UInfo$, 3, ":")      ; Контрольная сумма
+    UCrs$     = Left(UCrs$, Len(UCrs$)-1)
+    UDesc$ = ""                                  ; Описание обновлений
+    For i=2 To CountString(UData$, Chr(13)+Chr(10))
+      UDesc$ + StringField(UData$, i, Chr(13)+Chr(10))+Chr(10)
+    Next i
+    UDesc$ = Trim(UDesc$)
+    If IfNewVersion(UVers$, PROGRAM_VERSION$) ; Если версия больше текущей
+      ConsoleDateText("New version, v"+UVers$+", is available.", #False)
+      If UDesc$<>""
+        ConsoleDateText("Changes:", #False)
+        For i=1 To CountString(UDesc$, Chr(10))
+          ConsoleDateText(Chr(9)+StringField(UDesc$, i, Chr(10)), #False)
+        Next i
+      EndIf
+      UpdateConfirm:
+      SetConsoleCtrlHandler_(#Null, #True)
+      ConsoleDateText("Install this update? (Yes or No):", #False)
+      ConsoleLocateEx(57, GetCursorY()-1)
+      InputText$ = InputEx()
+      If UCase(InputText$)="YES"
+        PrintNEx("")
+        ConsoleDateText("Download the updates (size "+GetNormalSize(USize)+"), please wait...", #False)
+        InitNetwork()
+        If ReceiveHTTPFile("http://update.proapi.ru/btce_bot/latest.zip", GetTemporaryDirectory()+"btce_bot_update.dat")
+          ; Проверка CRC
+          If LCase(Right(Hex(CRC32FileFingerprint(GetTemporaryDirectory()+"btce_bot_update.dat")), Len(UCrs$)))=UCrs$
+            ConsoleDateText("All files are uploaded. Update in progress...", #False)
+            If PureZIP_Archive_Read(GetTemporaryDirectory()+"btce_bot_update.dat") ; Открываем архив с обновлением
+              ; Распаковываем его во временную папку.
+              CreateDirectory(GetTemporaryDirectory()+"btce_bot_update")
+              UpdateUnzip.l = PureZIP_Archive_FindFirst()
+              While UpdateUnzip = #UNZ_OK 
+                PureZIP_Archive_Extract(GetTemporaryDirectory()+"btce_bot_update\", #True)
+                UpdateUnzip.l = PureZIP_Archive_FindNext()
+              Wend
+              PureZIP_Archive_Close()
+              ; Запусаем обновление
+              If RunProgram(GetTemporaryDirectory()+"btce_bot_update\updater.exe", Chr(34)+GetPathPart(PROGRAM_FILENAME$)+Chr(34)+Chr(32)+Chr(34)+"-c "+Chr(39)+Configs\file+Chr(39)+Chr(34), GetTemporaryDirectory()+"btce_bot_update\")
+                UpdateInProgress = #True
+              Else
+                ConsoleDateText("An error occurred while installing the update!", #False)
+              EndIf
+            Else
+              ConsoleDateText("An error occurred while installing the update!", #False)
+            EndIf
+          Else
+            ConsoleDateText("The downloaded files are corrupted. Update aborted!", #False)
+          EndIf
+          DeleteFile(GetTemporaryDirectory()+"btce_bot_update.dat")
+        Else
+          ConsoleDateText("An error occurred while downloading the update!", #False)
+        EndIf
+      ElseIf UCase(InputText$)="NO"
+        PrintNEx("")
+        ConsoleDateText("Installing the update has been canceled.", #False)
+      Else
+        PrintNEx("")
+        Goto UpdateConfirm
+      EndIf
+    Else
+      ConsoleDateText("You are using the latest version of the program.", #False)
+    EndIf
   Else
-    Goto InitConfig
+    ConsoleDateText("Failed to check for program updates!", #False)
+  EndIf
+  If UpdateInProgress=#True
+    ConsoleDateText("Closing the program to complete the update.", #False)
+    curl_global_cleanup()
+    CloseConsoleEx()
+    End
   EndIf
 EndIf
 
-; Процедура обновления значений баланса на статус баре
-Procedure UpdateBalance()
-  StatusBarText(0, 0, FormatStr(__("Balance: %1 %2, %3 %4"), Double2String(getCurrentBalance(1), 3), UCase(StringField(Configs\bot_curpair, 1, "_")), Double2String(getCurrentBalance(2), 3), UCase(StringField(Configs\bot_curpair, 2, "_"))))
-  StatusBarText(0, 1, FormatStr(__("Orders: %1"), Str(Exchange\getInfo\open_orders)))
-  StatusBarText(0, 2, FormatStr(__("Price: 1 %1 = %2 %3"), UCase(StringField(Configs\bot_curpair, 1, "_")), Double2String(Exchange\getTicker\last, 3), UCase(StringField(Configs\bot_curpair, 2, "_"))))
-EndProcedure
+; Обработка нажатия Ctrl+C
+SetConsoleCtrlHandler_(#Null, #False)
+SetConsoleCtrlHandler_(?ExitLabel, #True)
 
-; Процедура добавления строки в лог работы бота
-Procedure AddToLog(Text.s, Verbose.b, Dated.b=#True)
-  ; Если строку необходимо вывести
-  If (Configs\log_verbose = #True And Verbose = #True) Or (Verbose = #False)
-    ; Формируем текстовую строку для записи в лог
-    If Dated=#True
-      Text = FormatDate("* [%dd.%mm.%yy %hh:%ii:%ss]: ", Date())+Text
-    EndIf
-    ; Пишем в файл, если необходимо
-    If Configs\log_file <> ""
-      Log = OpenFile(#PB_Any, Configs\log_file, #PB_File_SharedRead|#PB_File_SharedWrite|#PB_File_Append)
-      If Log
-        WriteStringN(Log, Text)
-        CloseFile(Log)
-      EndIf
-    EndIf
-    ; Выводим в лог гаджета
-    AddGadgetItem(0, -1, Text)
-    ; Автоскролл
-    If Configs\log_scroll=#True
-      SendMessage_(GadgetID(0), #EM_SCROLLCARET, 0, 0)
+Repeat ; Основной цикл
+  ;- TODO: уведомление о исполнении ордеров
+  ;- TODO: звуковые уведомления
+  ;- Загрузка новых данных с биржи
+  ConsoleDateText("Receives new data from the stock exchange.", #True)
+  If Not BTCE_OrderList() ; Список открытых ордеров
+    ConsoleDateText("`OrderList` method error ("+Exchange\OrderList\error+")!", #False)
+  Else
+    ConsoleDateText("`OrderList` method ok (there are no errors).", #True)
+    ConsoleBalance()
+  EndIf
+  If Not BTCE_getInfo() ; Вызываем getInfo
+    ConsoleDateText("`getInfo` method error ("+Exchange\getInfo\error+")!", #False)
+  Else
+    ConsoleDateText("`getInfo` method ok (there are no errors).", #True)
+    ConsoleBalance()
+  EndIf
+  If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
+    ConsoleDateText("`getTicker` method error ("+Exchange\getTicker\error+")!", #False)
+  Else
+    ConsoleDateText("`getTicker` method ok (there are no errors).", #True)
+    ConsoleBalance()
+  EndIf
+  ConsoleDateText("The new data is received. Analyzing further action.", #True)
+  ;- Проверяем права доступа
+  If Exchange\getInfo\success = #True
+    If Exchange\getInfo\rights\info=0 Or Exchange\getInfo\rights\trade=0
+      ConsoleDateText("Not enough permissions for this API key!", #False)
+      Break
     EndIf
   EndIf
-  ; Обновляем индикатор баланса
-  UpdateBalance()
-EndProcedure
-
-; Добавление информации о разработчике в лог
-Procedure AuthorInformation()
-  AddToLog("=============================================", #False, #False)
-  AddToLog(" "+FormatStr(__("BTC-E BOT (version %1)"), PROGRAM_VERSION$), #False, #False)
-  AddToLog(" URL: http://proapi.ru/btce_bot/", #False, #False)
-  AddToLog(" BTC: 17dhqFobsbr8Fraj4d2c5D4VB1uqf58DMK", #False, #False)
-  AddToLog(" LTC: LRoS6D2X5sk3LcDq2o4PX6awpXYpEZt3Qk", #False, #False)
-  AddToLog("=============================================", #False, #False)
-  AddToLog("", #False, #False)
-EndProcedure
-
-;- Открытие главного окна бота
-OpenWindow(0, #PB_Ignore, #PB_Ignore, 600, 385, FormatStr(__("BTC-E BOT (version %1)"), PROGRAM_VERSION$), #PB_Window_ScreenCentered|#PB_Window_MinimizeGadget)
-WebGadget(100, 5, 5, 590, 80, "http://proapi.ru/api/frame.php?w=590&h=80&a=btce_bot&v="+PROGRAM_VERSION$, #PB_Web_Mozilla)
-SetGadgetAttribute(100, #PB_Web_BlockPopups, #True)
-SetGadgetAttribute(100, #PB_Web_BlockPopupMenu, #True)
-EditorGadget(0, 5, 90, 400, 290, #PB_Editor_ReadOnly)
-Frame3DGadget(1, 415, 90, 175, 165, __("Trade options"))
-TextGadget(2, 425, 110, 80, 20, __("Curpair:"))      : TextGadget(3, 510, 110, 75, 20, UCase(StringField(Configs\bot_curpair, 1, "_"))+"/"+UCase(StringField(Configs\bot_curpair, 2, "_")))
-TextGadget(4, 425, 130, 80, 20, __("Difference:"))   : TextGadget(5, 510, 130, 75, 20, Double2String(Configs\bot_difference, 6))
-TextGadget(6, 425, 150, 80, 20, __("BUY min:"))      : TextGadget(7, 510, 150, 75, 20, Double2String(Configs\bot_min_buy, 6))
-TextGadget(8, 425, 170, 80, 20, __("BUY max:"))      : TextGadget(9, 510, 170, 75, 20, Double2String(Configs\bot_max_buy, 6))
-TextGadget(10, 425, 190, 80, 20, __("SELL min:"))   : TextGadget(11, 510, 190, 75, 20, Double2String(Configs\bot_min_sell, 6))
-TextGadget(12, 425, 210, 80, 20, __("SELL max:"))   : TextGadget(13, 510, 210, 75, 20, Double2String(Configs\bot_max_sell, 6))
-If Configs\bot_buy_ttl>0 : BTTL$ = FormatStr(__("%1 min"), Str(Configs\bot_buy_ttl)) : Else : BTTL$ = __("DISABLE") : EndIf
-TextGadget(14, 425, 230, 80, 20, __("Buy TTL:"))    : TextGadget(15, 510, 230, 75, 20, BTTL$)
-Frame3DGadget(16, 415, 260, 175, 85, __("Other options"))
-If Configs\bot_delay>0 : DELAY$ = FormatStr(__("%1 sec"), Str(Configs\bot_delay)) : Else : DELAY$ = __("DISABLE") : EndIf
-TextGadget(17, 425, 280, 80, 20, __("Delay:"))        : TextGadget(18, 510, 280, 75, 20, DELAY$)
-If Configs\log_verbose=#True : VERB$ = __("ENABLE") : Else : VERB$ = __("DISABLE") : EndIf
-TextGadget(19, 425, 300, 80, 20, __("Verbose mode:")) : TextGadget(20, 510, 300, 75, 20, VERB$)
-If Configs\log_file<>"" : LOGF$ = __("ENABLE") : Else : LOGF$ = __("DISABLE") : EndIf
-TextGadget(21, 425, 320, 80, 20, __("Log file:"))   : TextGadget(22, 510, 320, 75, 20, LOGF$)
-UsePNGImageDecoder() 
-ButtonImageGadget(23, 415, 355, 30, 25, ImageID(CatchImage(#PB_Any, ?HelpIcon)))
-ButtonImageGadget(24, 450, 355, 30, 25, ImageID(CatchImage(#PB_Any, ?ConfIcon)))
-ButtonGadget(25, 485, 355, 110, 25, __("Run BOT"))
-CreateStatusBar(0, WindowID(0))
-AddStatusBarField(#PB_Ignore)
-AddStatusBarField(#PB_Ignore)
-AddStatusBarField(#PB_Ignore)
-AuthorInformation()
-ResizeWindow(0, #PB_Ignore, #PB_Ignore, WindowWidth(0), WindowHeight(0)+StatusBarHeight(0))
-
-; Здесь мы будем хранить отложенные ордеры
-Global NewList PendingOrders.trce_trade3()
-
-; Процедура запуска бота
-Procedure StartBtceBot(*Null)
-  Run = #True
-  ClearStructure(@Exchange, TradeInfo)
-  InitializeStructure(@Exchange, TradeInfo)
-  DisableGadget(23, #True)
-  DisableGadget(24, #True)
-  SetGadgetText(25, __("Stop BOT"))
-  WindowTitle$ = GetWindowTitle(0)
-  SetWindowTitle(0, FormatStr(__("%1 [RUN]"), WindowTitle$))
-  ClearGadgetItems(0)
-  AuthorInformation()
-  AddToLog(__("Bot started."), #False)
-  ; Основная логика бота
-  Repeat
-    ;- TODO: уведомление о исполнении ордеров
-    ;- TODO: звуковые уведомления
-    ;- Загрузка новых данных с биржи
-    AddToLog(__("Receives new data from the stock exchange."), #True)
-    If Not BTCE_OrderList() ; Список открытых ордеров
-      AddToLog(FormatStr(__("`%1` method error (%2)!"), "OrderList", __(Exchange\OrderList\error)), #False)
-    Else
-      AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "OrderList"), #True)
-    EndIf
-    If Not BTCE_getInfo() ; Вызываем getInfo
-      AddToLog(FormatStr(__("`%1` method error (%2)!"), "getInfo", __(Exchange\getInfo\error)), #False)
-    Else
-      AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getInfo"), #True)
-    EndIf
-    If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
-      AddToLog(FormatStr(__("`%1` method error (%2)!"), "getTicker", __(Exchange\getTicker\error)), #False)
-    Else
-      AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getTicker"), #True)
-    EndIf
-    AddToLog(__("The new data is received. Analyzing further action."), #True)
-    ;- Проверяем права доступа
-    If Exchange\getInfo\success = #True
-      If Exchange\getInfo\rights\info=0 Or Exchange\getInfo\rights\trade=0
-        AddToLog(__("Not enough permissions for this API key!"), #False)
-        Break
-      EndIf
-    EndIf
-    ;- TODO: играть только на указанную сумму
-    ;- TODO: разный diff для sell и buy
-    ;- Создание ордеров на покупку
-    If getCurrentBalance(2)/(Exchange\getTicker\buy-Configs\bot_difference) >= Configs\bot_min_buy ; Если кол-во валюты, которую мы можем купить >= minb
-      If Configs\bot_fall_def=#False Or Exchange\LastsOrders\sell_price=0 Or Exchange\LastsOrders\sell_price-(Exchange\getTicker\buy-Configs\bot_difference)>=Configs\bot_difference/2 ; Только если курс растет
-        If getCurrentBalance(2)/(Exchange\getTicker\buy-Configs\bot_difference) > Configs\bot_max_buy ; Если кол-во валюты, которую мы можем купить > maxb
-          Amount.d = Configs\bot_max_buy
-        Else
-          Amount.d = getCurrentBalance(2)/(Exchange\getTicker\buy-Configs\bot_difference)
-        EndIf
-        Error.s = BTCE_Trade(Configs\bot_curpair, "buy", Exchange\getTicker\buy-Configs\bot_difference, Amount) ; Создаем ордер
-        If Error = "" ; Если ордер создан
-          AddToLog(FormatStr(__("Created a new buy order (%1 %2/%3 %4)."), Double2String(Amount, 3), UCase(StringField(Configs\bot_curpair, 1, "_")), Double2String(Exchange\getTicker\buy-Configs\bot_difference, 3), UCase(StringField(Configs\bot_curpair, 2, "_"))), #False)
-          ; Получаем новые данные с биржи
-          AddToLog(__("Receives new data from the stock exchange."), #True)
-          If Not BTCE_OrderList() ; Список открытых ордеров
-            AddToLog(FormatStr(__("`%1` method error (%2)!"), "OrderList", __(Exchange\OrderList\error)), #False)
-          Else
-            AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "OrderList"), #True)
-          EndIf
-          If Not BTCE_getInfo() ; Вызываем getInfo
-            AddToLog(FormatStr(__("`%1` method error (%2)!"), "getInfo", __(Exchange\getInfo\error)), #False)
-          Else
-            AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getInfo"), #True)
-          EndIf
-          If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
-            AddToLog(FormatStr(__("`%1` method error (%2)!"), "getTicker", __(Exchange\getTicker\error)), #False)
-          Else
-            AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getTicker"), #True)
-          EndIf
-          AddToLog(__("The new data is received. Analyzing further action."), #True)
-          ; Проверка на минимальную сумму продажи
-          If Exchange\LastsOrders\buy_amount < Configs\bot_min_sell
-            Exchange\LastsOrders\buy_amount = Configs\bot_min_sell
-          EndIf
-          ; Если у нас есть валюта для создания ордера на продажу
-          If getCurrentBalance(1) >= Exchange\LastsOrders\buy_amount
-            If Exchange\LastsOrders\buy_amount > Configs\bot_max_sell ; Если кол-во валюты, которую мы хочем продать > maxs
-              Amount.d = Configs\bot_max_sell
-            Else
-              Amount.d = Exchange\LastsOrders\buy_amount
-            EndIf
-            Error.s = BTCE_Trade(Configs\bot_curpair, "sell", Exchange\LastsOrders\buy_price+(Configs\bot_difference*2), Amount) ; Создаем ордер
-            If Error = "" ; Если ордер создан
-              AddToLog(FormatStr(__("Created a new sell order (%1 %2/%3 %4)."), Double2String(Amount, 3), UCase(StringField(Configs\bot_curpair, 1, "_")), Double2String(Exchange\LastsOrders\buy_price+(Configs\bot_difference*2), 3), UCase(StringField(Configs\bot_curpair, 2, "_"))), #False)
-              ; Получаем новые данные с биржи
-              AddToLog(__("Receives new data from the stock exchange."), #True)
-              If Not BTCE_OrderList() ; Список открытых ордеров
-                AddToLog(FormatStr(__("`%1` method error (%2)!"), "OrderList", __(Exchange\OrderList\error)), #False)
-              Else
-                AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "OrderList"), #True)
-              EndIf
-              If Not BTCE_getInfo() ; Вызываем getInfo
-                AddToLog(FormatStr(__("`%1` method error (%2)!"), "getInfo", __(Exchange\getInfo\error)), #False)
-              Else
-                AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getInfo"), #True)
-              EndIf
-              AddToLog(__("The new data is received. Analyzing further action."), #True)
-            Else ; Если не удалось создать ордер
-              AddToLog(FormatStr(__("Error creating sell order (%1)!"), Error), #False)
-              ; Откладываем ордер
-              AddElement(PendingOrders())
-              PendingOrders()\price  = Exchange\LastsOrders\buy_price+(Configs\bot_difference*2)
-              PendingOrders()\amount = Amount
-            EndIf
-          Else ; Если сейчас продать мы ничего не можем
-            ; Откладываем ордер
-            AddElement(PendingOrders())
-            PendingOrders()\price  = Exchange\LastsOrders\buy_price+(Configs\bot_difference*2)
-            PendingOrders()\amount = Exchange\LastsOrders\buy_amount
-          EndIf
-        Else ; Если не удалось создать ордер
-          AddToLog(FormatStr(__("Error creating buy order (%1)!"), Error), #False)
-        EndIf
-      EndIf
-    EndIf
-    ;- Отложенные ордеры на продажу
-    If ListSize(PendingOrders()) > 0
-      ; Получаем новые данные с биржи
-      AddToLog(__("Receives new data from the stock exchange."), #True)
-      If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
-        AddToLog(FormatStr(__("`%1` method error (%2)!"), "getTicker", __(Exchange\getTicker\error)), #False)
+  ;- TODO: играть только на указанную сумму
+  ;- TODO: разный diff для sell и buy
+  ;- Создание ордеров на покупку
+  If getCurrentBalance(2)/(Exchange\getTicker\buy-Configs\diff) >= Configs\minb ; Если кол-во валюты, которую мы можем купить >= minb
+    ;- TODO: сбрасывать Exchange\LastsOrders\sell_price в ноль при истечении указанного времени
+    If Exchange\LastsOrders\sell_price-(Exchange\getTicker\buy-Configs\diff)>=Configs\diff/2 Or Exchange\LastsOrders\sell_price=0 ; Только если курс растет
+      If getCurrentBalance(2)/(Exchange\getTicker\buy-Configs\diff) > Configs\maxb ; Если кол-во валюты, которую мы можем купить > maxb
+        Amount.d = Configs\maxb
       Else
-        AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getTicker"), #True)
+        Amount.d = getCurrentBalance(2)/(Exchange\getTicker\buy-Configs\diff)
       EndIf
-      AddToLog(__("The new data is received. Analyzing further action."), #True)    
-      PendingOrdersAmount.d = 0
-      ResetList(PendingOrders())
-      While NextElement(PendingOrders())
-        If PendingOrders()\amount > Configs\bot_max_sell ; Если кол-во валюты, которую мы хочем продать > maxs
-          PendingOrders()\amount = Configs\bot_max_sell
-        EndIf
-        PendingOrdersAmount + PendingOrders()\amount
-        ; Если  у нас достаточно валюты для создания ордера
-        If getCurrentBalance(1) >= PendingOrders()\amount
-          Error.s = BTCE_Trade(Configs\bot_curpair, "sell", PendingOrders()\price, PendingOrders()\amount) ; Создаем ордер
-          If Error = "" ; Если ордер создан
-            AddToLog(FormatStr(__("Created a new sell order (%1 %2/%3 %4)."), Double2String(PendingOrders()\amount, 3), UCase(StringField(Configs\bot_curpair, 1, "_")), Double2String(PendingOrders()\price, 3), UCase(StringField(Configs\bot_curpair, 2, "_"))), #False)
-            PendingOrdersAmount - PendingOrders()\amount
-            DeleteElement(PendingOrders()) ; Удаляем его из отложенных
-            ; Получаем новые данные с биржи
-            AddToLog(__("Receives new data from the stock exchange."), #True)
-            If Not BTCE_OrderList() ; Список открытых ордеров
-              AddToLog(FormatStr(__("`%1` method error (%2)!"), "OrderList", __(Exchange\OrderList\error)), #False)
-            Else
-              AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "OrderList"), #True)
-            EndIf
-            If Not BTCE_getInfo() ; Вызываем getInfo
-              AddToLog(FormatStr(__("`%1` method error (%2)!"), "getInfo", __(Exchange\getInfo\error)), #False)
-            Else
-              AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getInfo"), #True)
-            EndIf
-            If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
-              AddToLog(FormatStr(__("`%1` method error (%2)!"), "getTicker", __(Exchange\getTicker\error)), #False)
-            Else
-              AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getTicker"), #True)
-            EndIf
-            AddToLog(__("The new data is received. Analyzing further action."), #True)
-          Else
-            AddToLog(FormatStr(__("Error creating sell order (%1)!"), Error), #False)
-          EndIf
-        EndIf
-      Wend
-    EndIf
-    ;- Остальные ордеры на продажу
-    If getCurrentBalance(1)-PendingOrdersAmount >= Configs\bot_min_sell ; Если есть свободная валюта для продажи
-      ; Получаем новые данные с биржи
-      AddToLog(__("Receives new data from the stock exchange."), #True)
-      If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
-        AddToLog(FormatStr(__("`%1` method error (%2)!"), "getTicker", __(Exchange\getTicker\error)), #False)
-      Else
-        AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getTicker"), #True)
-      EndIf
-      AddToLog(__("The new data is received. Analyzing further action."), #True)
-      If getCurrentBalance(1)-PendingOrdersAmount > Configs\bot_max_sell ; Если кол-во валюты, которую мы хочем продать > maxs
-        Amount.d = Configs\bot_max_sell
-      Else
-        Amount.d = getCurrentBalance(1)-PendingOrdersAmount
-      EndIf
-      Error.s = BTCE_Trade(Configs\bot_curpair, "sell", Exchange\getTicker\sell+Configs\bot_difference, Amount) ; Создаем ордер    
+      Error.s = BTCE_Trade(Configs\curpair, "buy", Exchange\getTicker\buy-Configs\diff, Amount) ; Создаем ордер
       If Error = "" ; Если ордер создан
-        AddToLog(FormatStr(__("Created a new sell order (%1 %2/%3 %4)."), Double2String(Amount, 3), UCase(StringField(Configs\bot_curpair, 1, "_")), Double2String(Exchange\getTicker\sell+Configs\bot_difference, 3), UCase(StringField(Configs\bot_curpair, 2, "_"))), #False)
+        ConsoleDateText("Created a new buy order ("+Double2String(Amount, 3)+" "+UCase(StringField(Configs\curpair, 1, "_"))+"/"+Double2String(Exchange\getTicker\buy-Configs\diff, 3)+" "+UCase(StringField(Configs\curpair, 2, "_"))+").", #False)
         ; Получаем новые данные с биржи
-        AddToLog(__("Receives new data from the stock exchange."), #True)
+        ConsoleDateText("Receives new data from the stock exchange.", #True)
         If Not BTCE_OrderList() ; Список открытых ордеров
-          AddToLog(FormatStr(__("`%1` method error (%2)!"), "OrderList", __(Exchange\OrderList\error)), #False)
+          ConsoleDateText("`OrderList` method error ("+Exchange\OrderList\error+")!", #False)
         Else
-          AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "OrderList"), #True)
+          ConsoleDateText("`OrderList` method ok (there are no errors).", #True)
+          ConsoleBalance()
         EndIf
         If Not BTCE_getInfo() ; Вызываем getInfo
-          AddToLog(FormatStr(__("`%1` method error (%2)!"), "getInfo", __(Exchange\getInfo\error)), #False)
+          ConsoleDateText("`getInfo` method error ("+Exchange\getInfo\error+")!", #False)
         Else
-          AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getInfo"), #True)
+          ConsoleDateText("`getInfo` method ok (there are no errors).", #True)
+          ConsoleBalance()
         EndIf
         If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
-          AddToLog(FormatStr(__("`%1` method error (%2)!"), "getTicker", __(Exchange\getTicker\error)), #False)
+          ConsoleDateText("`getTicker` method error ("+Exchange\getTicker\error+")!", #False)
         Else
-          AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getTicker"), #True)
+          ConsoleDateText("`getTicker` method ok (there are no errors).", #True)
+          ConsoleBalance()
         EndIf
-        AddToLog(__("The new data is received. Analyzing further action."), #True)
-      Else
-        AddToLog(FormatStr(__("Error creating sell order (%1)!"), Error), #False)
-      EndIf
-    EndIf
-    ;- Отмена BUY ордеров с истекшим TTL
-    If Configs\bot_buy_ttl<>0
-      ResetList(Exchange\OrderList\orders())
-      While NextElement(Exchange\OrderList\orders())
-        If Exchange\OrderList\orders()\type = "buy" And Exchange\OrderList\orders()\status = 0
-          ;- FIXME: иногда почему то срабатывает сразу после создания ордера
-          If Exchange\getInfo\server_time - Exchange\OrderList\orders()\timestamp_created >= 60*Configs\bot_buy_ttl
-            Error.s = BTCE_CancelOrder(Exchange\OrderList\orders()\id)
-            If Error = "" ; Если ордер отменен
-              ;- FIXME: отмена ордера на продажу, который с ним связан
-              AddToLog(FormatStr(__("A buy order is successfully canceled (ID=%1)."), Str(Exchange\OrderList\orders()\id)), #False)
-            Else
-              AddToLog(FormatStr(__("Error when canceling buy order (%1)!"), Error), #False)
-            EndIf
-          EndIf
+        ConsoleDateText("The new data is received. Analyzing further action.", #True)
+        ; Проверка на минимальную сумму продажи
+        If Exchange\LastsOrders\buy_amount < Configs\mins
+          Exchange\LastsOrders\buy_amount = Configs\mins
         EndIf
-      Wend
-      ; Получаем новые данные с биржи
-      AddToLog(__("Receives new data from the stock exchange."), #True)
-      If Not BTCE_OrderList() ; Список открытых ордеров
-        AddToLog(FormatStr(__("`%1` method error (%2)!"), "OrderList", __(Exchange\OrderList\error)), #False)
-      Else
-        AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "OrderList"), #True)
-      EndIf
-      If Not BTCE_getInfo() ; Вызываем getInfo
-        AddToLog(FormatStr(__("`%1` method error (%2)!"), "getInfo", __(Exchange\getInfo\error)), #False)
-      Else
-        AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "getInfo"), #True)
-      EndIf
-      AddToLog(__("The new data is received. Analyzing further action."), #True)
-    EndIf
-    ;- Временная зарержка
-    If Configs\bot_delay>0 And Run=#True
-      AddToLog(FormatStr(__("No more action. Wait for %1 seconds..."), Str(Configs\bot_delay)), #True)
-      For i=0 To Configs\bot_delay-1
-        If Run=#True
-          Delay(1000)
-        Else
-          Break
-        EndIf
-      Next i
-    EndIf    
-  Until Run = #False
-  ;- Отмена ордеров на покупку
-  If Exchange\getInfo\rights\info=1 Or Exchange\getInfo\rights\trade=1
-    AddToLog(__("Cancel all buy orders..."), #False)
-    ; Получаем список активных ордеров
-    If Not BTCE_OrderList() ; Вызываем OrderList
-      AddToLog(FormatStr(__("`%1` method error (%2)!"), "OrderList", __(Exchange\OrderList\error)), #False)
-    Else
-      AddToLog(FormatStr(__("`%1` method ok (there are no errors)."), "OrderList"), #True)
-    EndIf
-    ; Ищем среди них ордеры на покупку
-    ResetList(Exchange\OrderList\orders())
-    While NextElement(Exchange\OrderList\orders())
-      If Exchange\OrderList\orders()\type = "buy" ; Если ордер на покупку
-        If Exchange\OrderList\orders()\status = 0 ; И он еще не исполнен
-          Error.s = BTCE_CancelOrder(Exchange\OrderList\orders()\id)
-          If Error = "" ; Если ордер отменен
-            AddToLog(FormatStr(__("A buy order is successfully canceled (ID=%1)."), Str(Exchange\OrderList\orders()\id)), #False)
+        ; Если у нас есть валюта для создания ордера на продажу
+        If getCurrentBalance(1) >= Exchange\LastsOrders\buy_amount
+          If Exchange\LastsOrders\buy_amount > Configs\maxs ; Если кол-во валюты, которую мы хочем продать > maxs
+            Amount.d = Configs\maxs
           Else
-            AddToLog(FormatStr(__("Error when canceling buy order (%1)!"), Error), #False)
+            Amount.d = Exchange\LastsOrders\buy_amount
           EndIf
+          Error.s = BTCE_Trade(Configs\curpair, "sell", Exchange\LastsOrders\buy_price+(Configs\diff*2), Amount) ; Создаем ордер
+          If Error = "" ; Если ордер создан
+            ConsoleDateText("Created a new sell order ("+Double2String(Amount, 3)+" "+UCase(StringField(Configs\curpair, 1, "_"))+"/"+Double2String(Exchange\LastsOrders\buy_price+(Configs\diff*2), 3)+" "+UCase(StringField(Configs\curpair, 2, "_"))+").", #False)
+            ; Получаем новые данные с биржи
+            ConsoleDateText("Receives new data from the stock exchange.", #True)
+            If Not BTCE_OrderList() ; Список открытых ордеров
+              ConsoleDateText("`OrderList` method error ("+Exchange\OrderList\error+")!", #False)
+            Else
+              ConsoleDateText("`OrderList` method ok (there are no errors).", #True)
+              ConsoleBalance()
+            EndIf
+            If Not BTCE_getInfo() ; Вызываем getInfo
+              ConsoleDateText("`getInfo` method error ("+Exchange\getInfo\error+")!", #False)
+            Else
+              ConsoleDateText("`getInfo` method ok (there are no errors).", #True)
+              ConsoleBalance()
+            EndIf
+            ConsoleDateText("The new data is received. Analyzing further action.", #True)
+          Else ; Если не удалось создать ордер
+            ConsoleDateText("Error creating sell order ("+Error+")!", #False)
+            ; Откладываем ордер
+            AddElement(PendingOrders())
+            PendingOrders()\price  = Exchange\LastsOrders\buy_price+(Configs\diff*2)
+            PendingOrders()\amount = Amount
+          EndIf
+        Else ; Если сейчас продать мы ничего не можем
+          ; Откладываем ордер
+          AddElement(PendingOrders())
+          PendingOrders()\price  = Exchange\LastsOrders\buy_price+(Configs\diff*2)
+          PendingOrders()\amount = Exchange\LastsOrders\buy_amount
+        EndIf
+      Else ; Если не удалось создать ордер
+        ConsoleDateText("Error creating buy order ("+Error+")!", #False)
+      EndIf
+    EndIf
+  EndIf
+  ;- Отложенные ордеры на продажу
+  If ListSize(PendingOrders()) > 0
+    ; Получаем новые данные с биржи
+    ConsoleDateText("Receives new data from the stock exchange.", #True)
+    If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
+      ConsoleDateText("`getTicker` method error ("+Exchange\getTicker\error+")!", #False)
+    Else
+      ConsoleDateText("`getTicker` method ok (there are no errors).", #True)
+      ConsoleBalance()
+    EndIf
+    ConsoleDateText("The new data is received. Analyzing further action.", #True)    
+    PendingOrdersAmount.d = 0
+    ResetList(PendingOrders())
+    While NextElement(PendingOrders())
+      If PendingOrders()\amount > Configs\maxs ; Если кол-во валюты, которую мы хочем продать > maxs
+        PendingOrders()\amount = Configs\maxs
+      EndIf
+      PendingOrdersAmount + PendingOrders()\amount
+      ; Если  у нас достаточно валюты для создания ордера
+      If getCurrentBalance(1) >= PendingOrders()\amount
+        Error.s = BTCE_Trade(Configs\curpair, "sell", PendingOrders()\price, PendingOrders()\amount) ; Создаем ордер
+        If Error = "" ; Если ордер создан
+          ConsoleDateText("Created a new sell order ("+Double2String(PendingOrders()\amount, 3)+" "+UCase(StringField(Configs\curpair, 1, "_"))+"/"+Double2String(PendingOrders()\price, 3)+" "+UCase(StringField(Configs\curpair, 2, "_"))+").", #False)
+          PendingOrdersAmount - PendingOrders()\amount
+          DeleteElement(PendingOrders()) ; Удаляем его из отложенных
+          ; Получаем новые данные с биржи
+          ConsoleDateText("Receives new data from the stock exchange.", #True)
+          If Not BTCE_OrderList() ; Список открытых ордеров
+            ConsoleDateText("`OrderList` method error ("+Exchange\OrderList\error+")!", #False)
+          Else
+            ConsoleDateText("`OrderList` method ok (there are no errors).", #True)
+            ConsoleBalance()
+          EndIf
+          If Not BTCE_getInfo() ; Вызываем getInfo
+            ConsoleDateText("`getInfo` method error ("+Exchange\getInfo\error+")!", #False)
+          Else
+            ConsoleDateText("`getInfo` method ok (there are no errors).", #True)
+            ConsoleBalance()
+          EndIf
+          If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
+            ConsoleDateText("`getTicker` method error ("+Exchange\getTicker\error+")!", #False)
+          Else
+            ConsoleDateText("`getTicker` method ok (there are no errors).", #True)
+            ConsoleBalance()
+          EndIf
+          ConsoleDateText("The new data is received. Analyzing further action.", #True)
+        Else
+          ConsoleDateText("Error creating sell order ("+Error+")!", #False)
         EndIf
       EndIf
     Wend
   EndIf
-  ; Конец основной логики бота
-  AddToLog(__("Bot stopped."), #False)
-  AddToLog("", #False, #False)
-  DisableGadget(23, #False)
-  DisableGadget(24, #False)
-  SetGadgetText(25, __("Run BOT"))
-  DisableGadget(25, #False)
-  SetWindowTitle(0, WindowTitle$)
-EndProcedure
+  ;- Остальные ордеры на продажу
+  If getCurrentBalance(1)-PendingOrdersAmount >= Configs\mins ; Если есть свободная валюта для продажи
+    ; Получаем новые данные с биржи
+    ConsoleDateText("Receives new data from the stock exchange.", #True)
+    If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
+      ConsoleDateText("`getTicker` method error ("+Exchange\getTicker\error+")!", #False)
+    Else
+      ConsoleDateText("`getTicker` method ok (there are no errors).", #True)
+      ConsoleBalance()
+    EndIf
+    ConsoleDateText("The new data is received. Analyzing further action.", #True)
+    If getCurrentBalance(1)-PendingOrdersAmount > Configs\maxs ; Если кол-во валюты, которую мы хочем продать > maxs
+      Amount.d = Configs\maxs
+    Else
+      Amount.d = getCurrentBalance(1)-PendingOrdersAmount
+    EndIf
+    Error.s = BTCE_Trade(Configs\curpair, "sell", Exchange\getTicker\sell+Configs\diff, Amount) ; Создаем ордер    
+    If Error = "" ; Если ордер создан
+      ConsoleDateText("Created a new sell order ("+Double2String(Amount, 3)+" "+UCase(StringField(Configs\curpair, 1, "_"))+"/"+Double2String(Exchange\getTicker\sell+Configs\diff, 3)+" "+UCase(StringField(Configs\curpair, 2, "_"))+").", #False)
+      ; Получаем новые данные с биржи
+      ConsoleDateText("Receives new data from the stock exchange.", #True)
+      If Not BTCE_OrderList() ; Список открытых ордеров
+        ConsoleDateText("`OrderList` method error ("+Exchange\OrderList\error+")!", #False)
+      Else
+        ConsoleDateText("`OrderList` method ok (there are no errors).", #True)
+        ConsoleBalance()
+      EndIf
+      If Not BTCE_getInfo() ; Вызываем getInfo
+        ConsoleDateText("`getInfo` method error ("+Exchange\getInfo\error+")!", #False)
+      Else
+        ConsoleDateText("`getInfo` method ok (there are no errors).", #True)
+        ConsoleBalance()
+      EndIf
+      If Not BTCE_getTicker() ; Получаем краткую информацию о состоянии рынка
+        ConsoleDateText("`getTicker` method error ("+Exchange\getTicker\error+")!", #False)
+      Else
+        ConsoleDateText("`getTicker` method ok (there are no errors).", #True)
+        ConsoleBalance()
+      EndIf
+      ConsoleDateText("The new data is received. Analyzing further action.", #True)
+    Else
+      ConsoleDateText("Error creating sell order ("+Error+")!", #False)
+    EndIf
+  EndIf
+  ;- Отмена BUY ордеров с истекшим TTL
+  If Configs\bttl<>0
+    ResetList(Exchange\OrderList\orders())
+    While NextElement(Exchange\OrderList\orders())
+      If Exchange\OrderList\orders()\type = "buy" And Exchange\OrderList\orders()\status = 0
+        ;- FIXME: иногда почему то срабатывает сразу после создания ордера
+        If Exchange\getInfo\server_time - Exchange\OrderList\orders()\timestamp_created >= 60*Configs\bttl
+          Error.s = BTCE_CancelOrder(Exchange\OrderList\orders()\id)
+          If Error = "" ; Если ордер отменен
+            ;- FIXME: отмена ордера на продажу, который с ним связан
+            ConsoleDateText("A buy order is successfully canceled (ID="+Str(Exchange\OrderList\orders()\id)+").", #False)
+          Else
+            ConsoleDateText("Error when canceling buy order ("+Error+")!", #False)
+          EndIf
+        EndIf
+      EndIf
+    Wend
+    ; Получаем новые данные с биржи
+    ConsoleDateText("Receives new data from the stock exchange.", #True)
+    If Not BTCE_OrderList() ; Список открытых ордеров
+      ConsoleDateText("`OrderList` method error ("+Exchange\OrderList\error+")!", #False)
+    Else
+      ConsoleDateText("`OrderList` method ok (there are no errors).", #True)
+      ConsoleBalance()
+    EndIf
+    If Not BTCE_getInfo() ; Вызываем getInfo
+      ConsoleDateText("`getInfo` method error ("+Exchange\getInfo\error+")!", #False)
+    Else
+      ConsoleDateText("`getInfo` method ok (there are no errors).", #True)
+      ConsoleBalance()
+    EndIf
+    ConsoleDateText("The new data is received. Analyzing further action.", #True)
+  EndIf
+  ;- Временная зарержка
+  If Configs\delay>0 And Exit=#False
+    ConsoleDateText("No more action. Wait for "+Str(Configs\delay)+" seconds...", #True)
+    For i=0 To Configs\delay-1
+      If Exit=#False
+        Delay(1000)
+      Else
+        Break
+      EndIf
+    Next i
+  EndIf
+Until Exit = #True
 
-; Если настроен автоматический запуск
-If Configs\app_autorun=#True
-  Thread = CreateThread(@StartBtceBot(), #Null)
+ExitLabel:
+SetConsoleCtrlHandler_(#Null, #True)
+
+;- Отмена ордеров на покупку
+If Exchange\getInfo\rights\info=1 Or Exchange\getInfo\rights\trade=1
+  ConsoleDateText("Cancel all buy orders...", #False)
+  ; Получаем список активных ордеров
+  If Not BTCE_OrderList() ; Вызываем OrderList
+    ConsoleDateText("`OrderList` method error ("+Exchange\OrderList\error+")!", #False)
+  Else
+    ConsoleDateText("`OrderList` method ok (there are no errors).", #True)
+  EndIf
+  ; Ищем среди них ордеры на покупку
+  ResetList(Exchange\OrderList\orders())
+  While NextElement(Exchange\OrderList\orders())
+    If Exchange\OrderList\orders()\type = "buy" ; Если ордер на покупку
+      If Exchange\OrderList\orders()\status = 0 ; И он еще не исполнен
+        Error.s = BTCE_CancelOrder(Exchange\OrderList\orders()\id)
+        If Error = "" ; Если ордер отменен
+          ConsoleDateText("A buy order is successfully canceled (ID="+Str(Exchange\OrderList\orders()\id)+").", #False)
+        Else
+          ConsoleDateText("Error when canceling buy order ("+Error+")!", #False)
+        EndIf
+      EndIf
+    EndIf
+  Wend
 EndIf
 
-; Основной цикл
-Repeat
-  Select WaitWindowEvent(100)
-    Case #PB_Event_Gadget
-      Select EventGadget() ; Гаджеты
-        Case 23 ; Справка
-          RunProgram(PROGRAM_FILENAME$, "--help", GetPathPart(PROGRAM_FILENAME$))
-        Case 24 ; Настройки
-          ;- TODO: открытие окна редактирования настроек
-          MessageRequester(__("Information"), __("This feature is not available in the current version of the program!"), #MB_ICONINFORMATION)
-        Case 25 ; Старт/Стоп
-          If IsThread(Thread) Or Run=#True ; Если бот запущен
-            DisableGadget(25, #True)
-            SetGadgetText(25, __("Stops..."))
-            AddToLog(__("Bot stops. Please wait..."), #False)
-            Run = #False ; Останавливаем
-          Else ; Если не запущен
-            Thread = CreateThread(@StartBtceBot(), #Null) ; То запускаем
-          EndIf
-      EndSelect
-    Case #PB_Event_CloseWindow ; Закрытие основного окна
-      If IsThread(Thread) Or Run=#True ; Если бот запущен
-        If Exit = #False
-          If MessageRequester(__("Question"), __("Stop bot and exit?"), #MB_ICONQUESTION|#PB_MessageRequester_YesNo)=#PB_MessageRequester_Yes
-            DisableGadget(25, #True)
-            SetGadgetText(25, __("Stops..."))
-            AddToLog(__("Bot stops. Please wait..."), #False)
-            Run = #False ; Останавливаем
-            Exit = #True
-          EndIf
-        Else
-          MessageRequester(__("Information"), __("Please wait until stop the bot!"), #MB_ICONINFORMATION)
-        EndIf
-      Else ; Если бот не запущен
-        Exit = #True ; Закрываем программу
-      EndIf
-  EndSelect
-Until (Exit = #True And Run=#False And Not IsThread(Thread))
+ConsoleDateText("BTC-E BOT is stopped.", #False)
+ConsoleLocateEx(0, GetCursorY()+2)
+PrintNEx(LSet("", 79))
+ConsoleLocateEx(0, GetCursorY()-1)
+CloseConsoleEx()
 
-; Освобождаем ресурсы
+; Освобождаем ресурсы CURL
 curl_global_cleanup()
-Translator_destroy()
 
 End
 
-;- Бинарные ресурсы
-DataSection
-  HelpIcon: IncludeBinary "inc/help.png"
-  ConfIcon: IncludeBinary "inc/conf.png"
-EndDataSection
-
 ; IDE Options = PureBasic 5.11 (Windows - x86)
+; ExecutableFormat = Console
 ; EnableThread
 ; EnableXP
-; UseIcon = inc/icon.ico
+; UseIcon = icons\btce_bot\icon.ico
 ; Executable = btce_bot.exe
-; EnableCompileCount = 1
-; EnableBuildCount = 1
+; SubSystem = UserLibThreadSafe
+; EnableCompileCount = 13
+; EnableBuildCount = 8
 ; IncludeVersionInfo
-; VersionField0 = 1.4.%BUILDCOUNT.%COMPILECOUNT
-; VersionField1 = 1.4.%BUILDCOUNT.%COMPILECOUNT
+; VersionField0 = 1.2.%BUILDCOUNT.%COMPILECOUNT
+; VersionField1 = 1.2.%BUILDCOUNT.%COMPILECOUNT
 ; VersionField2 = PROAPI.RU
 ; VersionField3 = BTC-E BOT
-; VersionField4 = 1.4.%BUILDCOUNT.%COMPILECOUNT
-; VersionField5 = 1.4.%BUILDCOUNT.%COMPILECOUNT
+; VersionField4 = 1.2.%BUILDCOUNT.%COMPILECOUNT
+; VersionField5 = 1.2.%BUILDCOUNT.%COMPILECOUNT
 ; VersionField6 = BTC-E BOT
 ; VersionField7 = btce_bot
 ; VersionField8 = btce_bot.exe
 ; VersionField9 = © PROAPI.RU, 2013
-; VersionField14 = http://proapi.ru/btce_bot/
+; VersionField14 = http://proapi.ru/btce_bot
 ; VersionField15 = VOS_NT_WINDOWS32
 ; VersionField16 = VFT_APP
 ; VersionField17 = 0409 English (United States)
 ; VersionField18 = BTC
 ; VersionField19 = LTC
-; VersionField21 = 17dhqFobsbr8Fraj4d2c5D4VB1uqf58DMK
-; VersionField22 = LRoS6D2X5sk3LcDq2o4PX6awpXYpEZt3Qk
+; VersionField21 = 1EPN3YTsfxPrJ8sfoGHLi2mt73Ex4xEwvk
+; VersionField22 = LYXZmq6hXa79KytU3bdrZZNJ93QV9uLqsT
